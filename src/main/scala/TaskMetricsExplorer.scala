@@ -52,6 +52,13 @@ class TaskMetricsExplorer(sparkSession: SparkSession) {
   val listenerTask = new TaskInfoRecorderListener()
   sparkSession.sparkContext.addSparkListener(listenerTask)
 
+  private def measureTime[A](f: => A): Double = {
+    val startTime = System.nanoTime()
+    f
+    val endTime = System.nanoTime()
+    return (endTime - startTime).toDouble/1000000000
+  }
+
   def runAndMeasure[T](f: => T): DataFrame = {
     val startTime = System.nanoTime()
     f
@@ -60,33 +67,71 @@ class TaskMetricsExplorer(sparkSession: SparkSession) {
     createDF(listenerTask.taskInfoMetrics)
   }
 
-  def createDF(taskEnd: mutable.Buffer[(Int, Int, String, TaskInfo, TaskMetrics, TaskEndReason)]): DataFrame = {
+  def runQueryStringAndMeasure(query:String): (DataFrame,Map[String, Double], DataFrame, Array[Row]) = {
+    val df = spark.sql(query)
+    val queryExecution = df.queryExecution
+    val parsingTime = measureTime{
+      queryExecution.logical
+    }
+    println(parsingTime)
+    val analysisTime = measureTime {
+      queryExecution.analyzed
+    }
+    println(analysisTime)
+    val optimizationTime = measureTime {
+      queryExecution.optimizedPlan
+    }
+    println(optimizationTime)
+    val planningTime = measureTime {
+      queryExecution.executedPlan
+    }
+    println(planningTime)
+    val executionStartTime = System.nanoTime().toDouble
+    val result = spark.sql(query).collect()
+    val executionEndTime = System.nanoTime().toDouble
+    val executionTime = (executionEndTime - executionStartTime)/1000000000
+    println(executionTime)
+    return (
+      createDF(listenerTask.taskInfoMetrics), 
+      Map(
+        "parsingTime" -> parsingTime,
+        "analysisTime" -> analysisTime,
+        "optimizationTime" -> optimizationTime,
+        "planningTime" -> planningTime,
+        "executionTime" -> executionTime,
+        "runTime" -> (parsingTime + analysisTime + optimizationTime + planningTime + executionTime)
+      ),
+      df,
+      result
+    )
+  }
+
+  private def createDF(taskEnd: mutable.Buffer[(Int, Int, String, TaskInfo, TaskMetrics, TaskEndReason)]): DataFrame = {
     import sparkSession.implicits._
-
     lazy val logger = LoggerFactory.getLogger(this.getClass.getName)
-
-    val row = taskEnd.map { case (stageId, stageAttemptId, taskType, taskInfo, taskMetrics, taskEndReason) =>
+    val row = taskEnd.map { case (stageId, stageAttemptId, taskType, taskInfo, taskMetrics, taskEndReason) => 
       val errorMessage = taskEndReason match {
         case Success =>
           Some("Success")
         case k: TaskKilled =>
           Some(k.reason)
-        case e: ExceptionFailure => // Handle ExceptionFailure because we might have accumUpdates
+        case e: ExceptionFailure =>
           Some(e.toErrorString)
-        case e: TaskFailedReason => // All other failure cases
+        case e: TaskFailedReason =>
           Some(e.toErrorString)
         case other =>
           logger.info(s"Unhandled task end reason: $other")
           None
       }
-
+      
       val gettingResultTime = {
         if (taskInfo.gettingResultTime == 0L) 0L
         else taskInfo.finishTime - taskInfo.gettingResultTime
       }
+      
       val schedulerDelay = math.max(0L, taskInfo.duration - taskMetrics.executorRunTime - taskMetrics.executorDeserializeTime -
         taskMetrics.resultSerializationTime - gettingResultTime)
-
+      
       TaskInfoMetrics(
         stageId,
         stageAttemptId,
@@ -127,7 +172,8 @@ class TaskMetricsExplorer(sparkSession: SparkSession) {
         taskMetrics.shuffleWriteMetrics.writeTime / 1000000,
         taskMetrics.shuffleWriteMetrics.bytesWritten,
         taskMetrics.shuffleWriteMetrics.recordsWritten,
-        errorMessage)
+        errorMessage
+      ) 
     }
     row.toDF()
   }
