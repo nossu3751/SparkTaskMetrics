@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory
 import org.apache.spark._
 import org.apache.spark.executor.TaskMetrics
 import org.apache.spark.scheduler._
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.{DataFrame, SparkSession, Row}
 
 case class TaskInfoMetrics(stageId: Int,
                            stageAttemptId: Int,
