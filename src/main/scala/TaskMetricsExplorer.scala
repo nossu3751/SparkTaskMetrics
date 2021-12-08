@@ -67,7 +67,7 @@ class TaskMetricsExplorer(sparkSession: SparkSession) {
     createDF(listenerTask.taskInfoMetrics)
   }
 
-  def runQueryStringAndMeasure(query:String): (DataFrame,Map[String, Double], DataFrame, Array[Row]) = {
+  def runQueryStringAndMeasure(query:String, spark:SparkSession = sparkSession): (DataFrame,Map[String, Double], DataFrame, Array[Row]) = {
     val df = spark.sql(query)
     val queryExecution = df.queryExecution
     val parsingTime = measureTime{
